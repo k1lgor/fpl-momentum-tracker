@@ -9,12 +9,42 @@ HISTORY_FILE = DATA_DIR / "gameweek_history.parquet"
 OUTPUT_FILE = DATA_DIR / "momentum_analysis.parquet"
 
 
-def calculate_slope(y):
-    if len(y) < 2:
+def calculate_momentum_score(y):
+    """
+    Calculate a Reliability-Weighted Slope for time series data.
+
+    Returns: Slope * R^2.
+    This metric identifies trends that are both STEEP (improving) and STEADY (reliable).
+    Regular slope can be misleading with outliers; R^2 ensures the trend is consistent.
+    """
+    if len(y) < 3:  # Need at least 3 points for a meaningful R-squared
         return 0.0
-    x = np.arange(len(y))
-    slope, _, _, _, _ = stats.linregress(x, y)
-    return slope
+
+    valid_pairs = [
+        (i, float(v)) for i, v in enumerate(y) if v is not None and not np.isnan(v)
+    ]
+
+    if len(valid_pairs) < 3:
+        return 0.0
+
+    try:
+        x_clean = np.array([p[0] for p in valid_pairs])
+        y_clean = np.array([p[1] for p in valid_pairs])
+
+        # Linear regression returns: slope, intercept, r_value, p_value, std_err
+        slope, _, r_value, _, _ = stats.linregress(x_clean, y_clean)
+
+        # Handle cases where variance is zero or calculation is invalid (results in NaN)
+        if np.isnan(slope) or np.isnan(r_value):
+            return 0.0
+
+        # R-Squared (Statistical Certainty)
+        r_squared = r_value**2
+
+        # Weighted score: Penalizes high variance (low R^2)
+        return float(slope * r_squared)
+    except Exception:
+        return 0.0
 
 
 # Registering a custom function for Polars is tricky for complex things,
@@ -33,7 +63,7 @@ def main():
     # Join players and history
     df = history_df.join(players_df, left_on="player_id", right_on="id")
 
-    # Cast metrics to Float64
+    # Cast metrics to Float64 safely (handle string decimals)
     metrics_to_cast = [
         "expected_goals",
         "expected_assists",
@@ -44,7 +74,23 @@ def main():
         "threat",
         "ict_index",
     ]
-    df = df.with_columns([pl.col(col).cast(pl.Float64) for col in metrics_to_cast])
+    cast_exprs = []
+    for col in metrics_to_cast:
+        if df.schema[col] == pl.String:
+            cast_exprs.append(pl.col(col).str.replace(",", ".").cast(pl.Float64))
+        else:
+            cast_exprs.append(pl.col(col).cast(pl.Float64))
+    df = df.with_columns(cast_exprs)
+
+    # Add per-game xGI per 90 and minutes indicator
+    # xGI (Expected Goal Involvement) is more holistic for MIDs and FWDs
+    df = df.with_columns(
+        pl.when(pl.col("minutes") > 0)
+        .then(pl.col("expected_goal_involvements") * 90 / pl.col("minutes"))
+        .otherwise(0)
+        .alias("xgi_per_90_per_game")
+    )
+    df = df.with_columns((pl.col("minutes") > 0).alias("minutes_gt_zero"))
 
     # Sort by player and gameweek/round (ensure chronological)
     df = df.sort(["player_id", "round"])
@@ -56,7 +102,7 @@ def main():
     for w in windows:
         print(f"Processing window size: {w}")
 
-        # Calculate rolling metrics
+        # Calculate rolling metrics - Only consider games where player played > 0 minutes
         windowed_df = df.group_by("player_id").agg(
             [
                 pl.col("web_name").first(),
@@ -65,48 +111,110 @@ def main():
                 pl.col("now_cost").first(),
                 pl.col("expected_goals").tail(w).sum().alias("rolling_xg"),
                 pl.col("goals_scored").tail(w).sum().alias("rolling_actual"),
+                pl.col("expected_goals_conceded").tail(w).sum().alias("rolling_xgc"),
+                pl.col("clean_sheets").tail(w).sum().alias("rolling_cs"),
+                pl.col("goals_conceded").tail(w).sum().alias("rolling_gc"),
+                pl.col("tackles").tail(w).sum().alias("rolling_tackles"),
+                pl.col("recoveries").tail(w).sum().alias("rolling_recoveries"),
+                pl.col("clearances_blocks_interceptions")
+                .tail(w)
+                .sum()
+                .alias("rolling_cbi"),
+                pl.col("saves").tail(w).sum().alias("rolling_saves"),
                 pl.col("minutes").tail(w).sum().alias("rolling_minutes"),
                 pl.col("expected_goals").tail(w).alias("xg_sequence"),
+                pl.col("xgi_per_90_per_game").tail(w).alias("xgi_per_90_sequence"),
+                # Count of games with minutes > 0 in window
+                pl.col("minutes_gt_zero").tail(w).sum().alias("games_played_in_window"),
             ]
         )
 
-        # Add xG diff
+        # Add xG diff and DEFCON metrics
         windowed_df = windowed_df.with_columns(
             [
                 (pl.col("rolling_actual") - pl.col("rolling_xg")).alias("xg_diff"),
-                (pl.col("rolling_xg") / pl.col("rolling_minutes") * 90)
-                .fill_nan(0)
+                # xG Diff per 90 minutes (with zero-division guard)
+                pl.when(pl.col("rolling_minutes") > 0)
+                .then(
+                    (pl.col("rolling_actual") - pl.col("rolling_xg"))
+                    / (pl.col("rolling_minutes") / 90)
+                )
+                .otherwise(0)
+                .alias("xg_diff_per_90"),
+                # xG per 90 minutes (with zero-division guard)
+                pl.when(pl.col("rolling_minutes") > 0)
+                .then(pl.col("rolling_xg") / pl.col("rolling_minutes") * 90)
+                .otherwise(0)
                 .alias("xg_per_90"),
+                # Adjusted minutes percentage based on actual games played
+                (pl.col("games_played_in_window") / w).alias("games_played_pct"),
                 (pl.col("rolling_minutes") / (w * 90)).alias("minutes_pct"),
+                # DEFCON Score: Tackles (1.0x) + Recoveries (0.25x) + CBI (1.0x)
+                # Rationale: Tackles and CBI are direct defensive actions
+                # Recoveries are weighted lower as they're less impactful
+                (
+                    pl.col("rolling_tackles")
+                    + (pl.col("rolling_recoveries") / 4.0)
+                    + pl.col("rolling_cbi")
+                ).alias("defcon_score"),
             ]
         )
-
-        # Calculate momentum trend (slope)
-        # We'll use a python function for the slope calculation on the sequence
+        # DEFCON per 90 (normalized by minutes, with zero-division guard)
         windowed_df = windowed_df.with_columns(
-            pl.col("xg_sequence")
-            .map_elements(calculate_slope, return_dtype=pl.Float64)
-            .alias("momentum_trend")
+            pl.when(pl.col("rolling_minutes") > 0)
+            .then(
+                (
+                    pl.col("rolling_tackles")
+                    + (pl.col("rolling_recoveries") / 4.0)
+                    + pl.col("rolling_cbi")
+                )
+                / pl.col("rolling_minutes")
+                * 90
+            )
+            .otherwise(0)
+            .alias("defcon_per_90")
         )
 
-        # Generate signals
-        # BUY: xG_diff < -0.5 (underperforming), momentum_trend > 0.1 (improving), minutes_pct > 60%
-        # SELL: xG_diff > 1.0 (overperforming), momentum_trend < -0.1 (declining)
+        # Calculate momentum score (Reliability-Weighted Slope) on xGI per 90 sequence
+        # This identifies players whose threat is both improving and consistent.
+        windowed_df = windowed_df.with_columns(
+            pl.col("xgi_per_90_sequence")
+            .map_elements(calculate_momentum_score, return_dtype=pl.Float64)
+            .alias("momentum_score")
+        )
+
+        # Generate improved signals with clear decision rules
+        #
+        # BUY Signal:
+        #   - Underperforming: xG Diff < -0.5 (getting chances but not scoring)
+        #   - Improving & Steady: momentum_score > 0.005 (Refined threshold for weighted slope)
+        #   - Regular starter: Games played > 50% (reliable minutes)
+        #
+        # SELL Signal:
+        #   - Overperforming with decline: xG Diff > 0.8 AND momentum_score < -0.005
+        #   - OR rotation risk: Games played < 50% AND still overperforming (xG Diff > 0.5)
+        #
+        # HOLD: Everything else
         windowed_df = windowed_df.with_columns(
             pl.when(
                 (pl.col("xg_diff") < -0.5)
-                & (pl.col("momentum_trend") > 0.05)
-                & (pl.col("minutes_pct") > 0.6)
+                & (pl.col("momentum_score") > 0.005)
+                & (pl.col("games_played_pct") > 0.5)
             )
             .then(pl.lit("BUY"))
-            .when((pl.col("xg_diff") > 1.0) & (pl.col("momentum_trend") < -0.05))
+            .when(
+                # Overperforming with declining trend
+                ((pl.col("xg_diff") > 0.8) & (pl.col("momentum_score") < -0.005))
+                # OR losing minutes while overperforming (rotation/form risk)
+                | ((pl.col("games_played_pct") < 0.5) & (pl.col("xg_diff") > 0.5))
+            )
             .then(pl.lit("SELL"))
             .otherwise(pl.lit("HOLD"))
             .alias("signal")
         )
 
         windowed_df = windowed_df.with_columns(pl.lit(w).alias("window_size"))
-        results.append(windowed_df.drop("xg_sequence"))
+        results.append(windowed_df.drop(["xg_sequence", "xgi_per_90_sequence"]))
 
     # Combine results
     final_df = pl.concat(results)
@@ -123,7 +231,7 @@ def main():
         .head(5)
     )
     print(
-        buys.select(["web_name", "position", "team_name", "xg_diff", "momentum_trend"])
+        buys.select(["web_name", "position", "team_name", "xg_diff", "momentum_score"])
     )
 
 
