@@ -8,6 +8,10 @@ default:
 setup:
     uv sync
 
+# Install development dependencies (including pytest)
+install-dev:
+    uv sync --extra dev
+
 # Fetch fresh data from the FPL API
 fetch:
     uv run src/scripts/fetch_data.py
@@ -26,6 +30,14 @@ ui:
 # Run the specific underperforming forwards report
 report-fwds:
     uv run src/scripts/report_forwards.py
+
+# Run all tests
+test:
+    uv run pytest tests/ -v
+
+# Run tests in watch mode
+test-watch:
+    uv run pytest tests/ -v --tb=short -x
 
 # Clean up data cache
 clean:
