@@ -109,19 +109,21 @@ def main():
                 pl.col("position").first(),
                 pl.col("team_name").first(),
                 pl.col("now_cost").first(),
-                pl.col("expected_goals").tail(w).sum().alias("rolling_xg"),
-                pl.col("goals_scored").tail(w).sum().alias("rolling_actual"),
-                pl.col("expected_goals_conceded").tail(w).sum().alias("rolling_xgc"),
-                pl.col("clean_sheets").tail(w).sum().alias("rolling_cs"),
-                pl.col("goals_conceded").tail(w).sum().alias("rolling_gc"),
-                pl.col("tackles").tail(w).sum().alias("rolling_tackles"),
-                pl.col("recoveries").tail(w).sum().alias("rolling_recoveries"),
+                # Filter by minutes > 0 before summing to avoid data leakage
+                pl.col("expected_goals").filter(pl.col("minutes") > 0).tail(w).sum().alias("rolling_xg"),
+                pl.col("goals_scored").filter(pl.col("minutes") > 0).tail(w).sum().alias("rolling_actual"),
+                pl.col("expected_goals_conceded").filter(pl.col("minutes") > 0).tail(w).sum().alias("rolling_xgc"),
+                pl.col("clean_sheets").filter(pl.col("minutes") > 0).tail(w).sum().alias("rolling_cs"),
+                pl.col("goals_conceded").filter(pl.col("minutes") > 0).tail(w).sum().alias("rolling_gc"),
+                pl.col("tackles").filter(pl.col("minutes") > 0).tail(w).sum().alias("rolling_tackles"),
+                pl.col("recoveries").filter(pl.col("minutes") > 0).tail(w).sum().alias("rolling_recoveries"),
                 pl.col("clearances_blocks_interceptions")
+                .filter(pl.col("minutes") > 0)
                 .tail(w)
                 .sum()
                 .alias("rolling_cbi"),
-                pl.col("saves").tail(w).sum().alias("rolling_saves"),
-                pl.col("minutes").tail(w).sum().alias("rolling_minutes"),
+                pl.col("saves").filter(pl.col("minutes") > 0).tail(w).sum().alias("rolling_saves"),
+                pl.col("minutes").filter(pl.col("minutes") > 0).tail(w).sum().alias("rolling_minutes"),
                 pl.col("expected_goals").tail(w).alias("xg_sequence"),
                 pl.col("xgi_per_90_per_game").tail(w).alias("xgi_per_90_sequence"),
                 # Count of games with minutes > 0 in window
@@ -160,17 +162,10 @@ def main():
             ]
         )
         # DEFCON per 90 (normalized by minutes, with zero-division guard)
+        # Reuse the defcon_score and normalize by minutes
         windowed_df = windowed_df.with_columns(
             pl.when(pl.col("rolling_minutes") > 0)
-            .then(
-                (
-                    pl.col("rolling_tackles")
-                    + (pl.col("rolling_recoveries") / 4.0)
-                    + pl.col("rolling_cbi")
-                )
-                / pl.col("rolling_minutes")
-                * 90
-            )
+            .then(pl.col("defcon_score") / pl.col("rolling_minutes") * 90)
             .otherwise(0)
             .alias("defcon_per_90")
         )
@@ -192,7 +187,9 @@ def main():
         #
         # SELL Signal:
         #   - Overperforming with decline: xG Diff > 0.8 AND momentum_score < -0.005
-        #   - OR rotation risk: Games played < 50% AND still overperforming (xG Diff > 0.5)
+        #     (Scoring unsustainably with declining underlying numbers)
+        #   - OR rotation risk with overperformance: Games played < 30% AND xG Diff > 1.0 
+        #     (Very low minutes but very high overperformance - likely to regress or lose place)
         #
         # HOLD: Everything else
         windowed_df = windowed_df.with_columns(
@@ -203,10 +200,11 @@ def main():
             )
             .then(pl.lit("BUY"))
             .when(
-                # Overperforming with declining trend
+                # Overperforming with declining underlying trend
                 ((pl.col("xg_diff") > 0.8) & (pl.col("momentum_score") < -0.005))
-                # OR losing minutes while overperforming (rotation/form risk)
-                | ((pl.col("games_played_pct") < 0.5) & (pl.col("xg_diff") > 0.5))
+                # OR severe rotation risk with extreme overperformance
+                # (tighter thresholds: <30% games and >1.0 xG diff to avoid false positives)
+                | ((pl.col("games_played_pct") < 0.3) & (pl.col("xg_diff") > 1.0))
             )
             .then(pl.lit("SELL"))
             .otherwise(pl.lit("HOLD"))

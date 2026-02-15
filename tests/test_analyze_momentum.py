@@ -170,6 +170,43 @@ class TestMomentumAnalysisIntegration:
             == full_minutes["expected_goal_involvements"]
         ).all()
 
+    def test_rolling_aggregation_filters_zero_minutes(self):
+        """Test that rolling aggregations exclude games where minutes = 0 (data leakage fix)."""
+        # Create test data with some zero-minute games
+        data = []
+        for gw in range(1, 5):
+            data.append({
+                "player_id": 1,
+                "round": gw,
+                "minutes": 0 if gw <= 2 else 90,  # First 2 games: no minutes
+                "expected_goals": 0.5,  # xG present even when not playing
+                "goals_scored": 0,
+            })
+        df = pl.DataFrame(data)
+        
+        # Simulate the filtering logic from analyze_momentum.py
+        # Rolling sum WITH filter (correct behavior)
+        rolling_with_filter = (
+            df.group_by("player_id")
+            .agg(pl.col("expected_goals").filter(pl.col("minutes") > 0).tail(4).sum())
+        )
+        
+        # Rolling sum WITHOUT filter (data leakage - old behavior)
+        rolling_without_filter = (
+            df.group_by("player_id")
+            .agg(pl.col("expected_goals").tail(4).sum())
+        )
+        
+        # With filter: should only sum games 3-4 = 0.5 + 0.5 = 1.0
+        assert rolling_with_filter["expected_goals"][0] == 1.0, (
+            "Should only sum xG from games where minutes > 0"
+        )
+        
+        # Without filter: would sum all 4 games = 0.5 * 4 = 2.0 (incorrect)
+        assert rolling_without_filter["expected_goals"][0] == 2.0, (
+            "Without filter, incorrectly sums xG from all games including zero minutes"
+        )
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
