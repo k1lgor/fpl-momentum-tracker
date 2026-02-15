@@ -156,7 +156,7 @@ wheels = [
 
 [[package]]
 name = "fpl-momentum-tracker"
-version = "0.1.0"
+version = "0.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "altair" },
@@ -167,6 +167,8 @@ dependencies = [
     { name = "scipy" },
     { name = "st-annotated-text" },
     { name = "streamlit" },
+    { name = "streamlit-antd-components" },
+    { name = "streamlit-option-menu" },
 ]
 
 [package.optional-dependencies]
@@ -187,6 +189,8 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.17.0" },
     { name = "st-annotated-text", specifier = ">=4.0.2" },
     { name = "streamlit", specifier = ">=1.53.1" },
+    { name = "streamlit-antd-components", specifier = ">=0.3.2" },
+    { name = "streamlit-option-menu", specifier = ">=0.4.0" },
 ]
 provides-extras = ["dev"]
 
@@ -1053,6 +1057,29 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/31/cc/347730d06e3950e426bf2ee06eaf9b281e18387bffa82bd69aa0f281eee3/streamlit-1.53.1.tar.gz", hash = "sha256:ae656af3b68b4bb2d669fa977606096f2021bcbaa14a454a290f8e0a37bab277", size = 8650843 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/23/c3/5e6f6a9328d57436b658447b6f05969d435df8d31344e34ec75c3044657b/streamlit-1.53.1-py3-none-any.whl", hash = "sha256:9534d151feea485b69200dd36448f95f418c511e8c81186ceb57133bdf1443f7", size = 9111505 },
+]
+
+[[package]]
+name = "streamlit-antd-components"
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "streamlit" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b5/dc/1ed6266b606e3b494b9af3e2c310ea6cbe2e967aa18873d03c5b267b4c81/streamlit_antd_components-0.3.2-py3-none-any.whl", hash = "sha256:5ae28496127202ed266ea167649436a15f3d548a4805ee5d992c6fc0fe103fd6", size = 2805502 },
+]
+
+[[package]]
+name = "streamlit-option-menu"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "streamlit" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5e/27/72dc451cdaef1714fd0d75cc430e50a06c12c9046295fdf1f94af1b766eb/streamlit-option-menu-0.4.0.tar.gz", hash = "sha256:48ec69d59e547fa2fa4bfae001620df8af56a80de2f765ddbb9fcbfb84017129", size = 827290 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/52/2f525ad4262dc83d67297f69ec5afcee1438b9e9ae22aa318396725ddbed/streamlit_option_menu-0.4.0-py3-none-any.whl", hash = "sha256:a55fc7554047b6db371595af2182e435b8a2c715ee6124e8543685bd4670b07e", size = 829255 },
 ]
 
 [[package]]

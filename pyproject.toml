@@ -1,6 +1,6 @@
 [project]
 name = "fpl-momentum-tracker"
-version = "0.2.0"
+version = "0.3.0"
 description = "FPL xG Momentum Tracker: Identify underperforming gems and overperforming traps using rolling xG analysis."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,6 +13,8 @@ dependencies = [
     "scipy>=1.17.0",
     "st-annotated-text>=4.0.2",
     "streamlit>=1.53.1",
+    "streamlit-antd-components>=0.3.2",
+    "streamlit-option-menu>=0.4.0",
 ]
 
 [project.optional-dependencies]
